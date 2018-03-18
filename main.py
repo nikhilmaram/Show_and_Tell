@@ -4,6 +4,9 @@ import tensorflow as tf
 from config import Config
 from model import CaptionGenerator
 from dataset import prepare_train_data, prepare_eval_data, prepare_test_data
+from scipy.misc import imread, imresize
+from imagenet_classes import class_names
+import numpy as np
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -30,7 +33,7 @@ tf.flags.DEFINE_boolean('train_cnn', False,
 tf.flags.DEFINE_integer('beam_size', 3,
                         'The size of beam search for caption generation')
 
-def main():
+def main(argv):
     config = Config()
     config.phase = FLAGS.phase
     config.train_cnn = FLAGS.train_cnn
@@ -44,8 +47,8 @@ def main():
             sess.run(tf.global_variables_initializer())
             if FLAGS.load:
                 model.load(sess, FLAGS.model_file)
-            if FLAGS.load_cnn:
-                model.load_cnn(sess, FLAGS.cnn_model_file)
+            # Always load the cnn file
+            model.load_cnn(sess, FLAGS.cnn_model_file)
             tf.get_default_graph().finalize()
             model.train(sess, data)
 
@@ -56,6 +59,22 @@ def main():
             model.load(sess, FLAGS.model_file)
             tf.get_default_graph().finalize()
             model.eval(sess, coco, data, vocabulary)
+
+        elif FLAGS.phase == 'test_loaded_cnn':
+            # testing cnn phase
+            model = CaptionGenerator(config)
+            sess.run(tf.global_variables_initializer())
+            imgs = tf.placeholder(tf.float32, [None, 224, 224, 3])
+            probs = model.test_cnn(imgs)
+            model.load_cnn(sess, FLAGS.cnn_model_file)
+
+            img1 = imread('./man.jpg', mode='RGB')
+            img1 = imresize(img1, (224, 224))
+
+            prob = sess.run(probs, feed_dict={imgs: [img1]})[0]
+            preds = (np.argsort(prob)[::-1])[0:5]
+            for p in preds:
+                print(class_names[p], prob[p])
 
         else:
             # testing phase
