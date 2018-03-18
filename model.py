@@ -10,7 +10,7 @@ class CaptionGenerator(BaseModel):
     def build(self):
         """ Build the model. """
         self.build_cnn()
-        # self.build_rnn()
+        self.build_rnn()
         # if self.is_train:
         #     self.build_optimizer()
         #     self.build_summary()
@@ -35,6 +35,7 @@ class CaptionGenerator(BaseModel):
         images = tf.placeholder( dtype=tf.float32, shape=[config.batch_size] + self.image_shape)
         if self.config.cnn == 'vgg16':
             self.build_vgg16(images)
+
         print("CNN built.")
 
     def build_vgg16(self,images):
@@ -247,10 +248,13 @@ class CaptionGenerator(BaseModel):
             self.fc3l = tf.nn.bias_add(tf.matmul(self.fc2, fc3w), fc3b)
 
         # self.conv_feats = self.fc2
-        self.num_ctx = 196
+        ## Reshaping the 4096 to fit the lstm size
+        reshaped_fc2_feats = tf.reshape(self.fc2,
+                                            [config.batch_size, 8, 512])
+        self.num_ctx = 8
         self.dim_ctx = 512
         self.images = images
-        self.conv_feats = self.fc2
+        self.conv_feats = reshaped_fc2_feats
 
 
     def build_rnn(self):
@@ -281,7 +285,7 @@ class CaptionGenerator(BaseModel):
                 dtype = tf.int32,
                 shape = [config.batch_size])
 
-        # Setup the word embedding
+        # Setup the word embedding, we can use pre trained word embeddings later //TODO
         with tf.variable_scope("word_embedding"):
             embedding_matrix = tf.get_variable(
                 name = 'weights',
@@ -301,11 +305,14 @@ class CaptionGenerator(BaseModel):
                 output_keep_prob = 1.0-config.lstm_drop_rate,
                 state_keep_prob = 1.0-config.lstm_drop_rate)
 
-        # Initialize the LSTM using the mean context
-        with tf.variable_scope("initialize"):
-            context_mean = tf.reduce_mean(self.conv_feats, axis = 1)
-            initial_memory, initial_output = self.initialize(context_mean)
-            initial_state = initial_memory, initial_output
+        # # Initialize the LSTM using the mean context
+        # with tf.variable_scope("initialize"):
+        #     context_mean = tf.reduce_mean(self.conv_feats, axis = 1)
+        #     initial_memory, initial_output = self.initialize(context_mean)
+        #     initial_state = initial_memory, initial_output
+
+        ## 8 * 512 is reduced to 512 by mean, We can use matrix multiplaction also to covert // TODO
+
 
         # Prepare to run
         predictions = []
@@ -314,25 +321,15 @@ class CaptionGenerator(BaseModel):
             cross_entropies = []
             predictions_correct = []
             num_steps = config.max_caption_length
-            last_output = initial_output
-            last_memory = initial_memory
             last_word = tf.zeros([config.batch_size], tf.int32)
+            image_emb = tf.reduce_mean(self.conv_feats, axis=1)
+            last_state = image_emb
         else:
             num_steps = 1
-        last_state = last_memory, last_output
+        #last_state = last_memory, last_output
 
         # Generate the words one by one
         for idx in range(num_steps):
-            # Attention mechanism
-            with tf.variable_scope("attend"):
-                alpha = self.attend(contexts, last_output)
-                context = tf.reduce_sum(contexts*tf.expand_dims(alpha, 2),
-                                        axis = 1)
-                if self.is_train:
-                    tiled_masks = tf.tile(tf.expand_dims(masks[:, idx], 1),
-                                         [1, self.num_ctx])
-                    masked_alpha = alpha * tiled_masks
-                    alphas.append(tf.reshape(masked_alpha, [-1]))
 
             # Embed the last word
             with tf.variable_scope("word_embedding"):
@@ -340,20 +337,30 @@ class CaptionGenerator(BaseModel):
                                                     last_word)
            # Apply the LSTM
             with tf.variable_scope("lstm"):
-                current_input = tf.concat([context, word_embed], 1)
+                #current_input = tf.concat([context, word_embed], 1)
+                current_input = word_embed
                 output, state = lstm(current_input, last_state)
-                memory, _ = state
+
+            # TODO : Now we have state we need to convert the state into output word
 
             # Decode the expanded output of LSTM into a word
             with tf.variable_scope("decode"):
-                expanded_output = tf.concat([output,
-                                             context,
-                                             word_embed],
-                                             axis = 1)
+                # expanded_output = tf.concat([output,
+                #                              context,
+                #                              word_embed],
+                #                              axis = 1)
+                ## Since we are not considering any context
+                expanded_output = output
+                ## Logits is of size vocab
                 logits = self.decode(expanded_output)
                 probs = tf.nn.softmax(logits)
+                ## Prediction is the index of the word the predicted in the vocab
                 prediction = tf.argmax(logits, 1)
                 predictions.append(prediction)
+
+            ## TODO : Make the same thing for test
+
+
 
             # Compute the loss for this step, if necessary
             if self.is_train:
@@ -371,7 +378,6 @@ class CaptionGenerator(BaseModel):
                 predictions_correct.append(prediction_correct)
 
                 last_output = output
-                last_memory = memory
                 last_state = state
                 last_word = sentences[:, idx]
 
@@ -383,17 +389,9 @@ class CaptionGenerator(BaseModel):
             cross_entropy_loss = tf.reduce_sum(cross_entropies) \
                                  / tf.reduce_sum(masks)
 
-            alphas = tf.stack(alphas, axis = 1)
-            alphas = tf.reshape(alphas, [config.batch_size, self.num_ctx, -1])
-            attentions = tf.reduce_sum(alphas, axis = 2)
-            diffs = tf.ones_like(attentions) - attentions
-            attention_loss = config.attention_loss_factor \
-                             * tf.nn.l2_loss(diffs) \
-                             / (config.batch_size * self.num_ctx)
-
             reg_loss = tf.losses.get_regularization_loss()
 
-            total_loss = cross_entropy_loss + attention_loss + reg_loss
+            total_loss = cross_entropy_loss  + reg_loss
 
             predictions_correct = tf.stack(predictions_correct, axis = 1)
             accuracy = tf.reduce_sum(predictions_correct) \
@@ -405,10 +403,9 @@ class CaptionGenerator(BaseModel):
             self.masks = masks
             self.total_loss = total_loss
             self.cross_entropy_loss = cross_entropy_loss
-            self.attention_loss = attention_loss
             self.reg_loss = reg_loss
             self.accuracy = accuracy
-            self.attentions = attentions
+
         else:
             self.initial_memory = initial_memory
             self.initial_output = initial_output
