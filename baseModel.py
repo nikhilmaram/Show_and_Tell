@@ -273,17 +273,28 @@ class BaseModel(object):
 
     def load_cnn(self, session, data_path, ignore_missing=True):
         """ Load a pretrained CNN model. """
+        print("All variables present...")
+        for var in tf.all_variables():
+            print(var)
+        with tf.variable_scope('conv1_1',reuse = True):
+            kernel = tf.get_variable('conv1_1_W')
+
+
         print("Loading the CNN from %s..." %data_path)
-        data_dict = np.load(data_path,encoding='latin1').item()
+        data_dict = np.load(data_path,encoding='latin1')
+        keys = sorted(data_dict.keys())
         count = 0
-        for op_name in tqdm(data_dict):
-            print(op_name )
+        for param_name in tqdm(data_dict.keys()):
+            op_name = param_name[:-2]
+            print(param_name)
+            #print(op_name)
             with tf.variable_scope(op_name, reuse = True):
-                for param_name, data in data_dict[op_name].items():
-                    try:
-                        var = tf.get_variable(param_name)
-                        session.run(var.assign(data))
-                        count += 1
-                    except ValueError:
-                        pass
+                try:
+                    var = tf.get_variable(param_name)
+                    session.run(var.assign(data_dict[param_name]))
+                    count += 1
+                except ValueError:
+                    print("No such variable")
+                    pass
+
         print("%d tensors loaded." %count)
