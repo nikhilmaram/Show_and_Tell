@@ -33,6 +33,12 @@ tf.flags.DEFINE_boolean('train_cnn', False,
 tf.flags.DEFINE_integer('beam_size', 3,
                         'The size of beam search for caption generation')
 
+tf.flags.DEFINE_string('image_file','./man.jpg','The file to test the CNN')
+
+
+## Start token is not required, Stop Tokens are given via "." at the end of each sentence.
+## TODO : Early stop functionality by considering validation error. We should first split the validation data.
+
 def main(argv):
     config = Config()
     config.phase = FLAGS.phase
@@ -47,8 +53,9 @@ def main(argv):
             sess.run(tf.global_variables_initializer())
             if FLAGS.load:
                 model.load(sess, FLAGS.model_file)
-            # Always load the cnn file
-            model.load_cnn(sess, FLAGS.cnn_model_file)
+            #load the cnn file
+            if FLAGS.load_cnn:
+                model.load_cnn(sess, FLAGS.cnn_model_file)
             tf.get_default_graph().finalize()
             model.train(sess, data)
 
@@ -61,14 +68,14 @@ def main(argv):
             model.eval(sess, coco, data, vocabulary)
 
         elif FLAGS.phase == 'test_loaded_cnn':
-            # testing cnn phase
+            # testing only cnn
             model = CaptionGenerator(config)
             sess.run(tf.global_variables_initializer())
             imgs = tf.placeholder(tf.float32, [None, 224, 224, 3])
             probs = model.test_cnn(imgs)
             model.load_cnn(sess, FLAGS.cnn_model_file)
 
-            img1 = imread('./man.jpg', mode='RGB')
+            img1 = imread(FLAGS.image_file, mode='RGB')
             img1 = imresize(img1, (224, 224))
 
             prob = sess.run(probs, feed_dict={imgs: [img1]})[0]
