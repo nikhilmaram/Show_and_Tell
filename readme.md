@@ -37,8 +37,7 @@ tensorboard --logdir='./summary/'
 To evaluate a trained model using the COCO val2014 data, run a command like this:
 ```shell
 python main.py --phase=eval \
-    --model_file='./models/xxxxxx.npy' \
-    --beam_size=3
+    --model_file='./models/xxxxxx.npy'
 ```
 The result will be shown in stdout. Furthermore, the generated captions will be saved in the file `val/results.json`.
 
@@ -46,13 +45,12 @@ The result will be shown in stdout. Furthermore, the generated captions will be 
 You can use the trained model to generate captions for any JPEG images! Put such images in the folder `test/images`, and run a command like this:
 ```shell
 python main.py --phase=test \
-    --model_file='./models/xxxxxx.npy' \
-    --beam_size=3
+    --model_file='./models/xxxxxx.npy'
 ```
 The generated captions will be saved in the folder `test/results`.
 
 ### Results
-A pretrained model with default configuration can be downloaded [here](https://ucsb.box.com/s/vqcxockfzoxfqltrg4l619x1cfvnskog). This model was trained solely on the COCO train2014 data. It achieves the following BLEU scores on the COCO val2014 data (with `beam size=3`):
+A pretrained model with default configuration can be downloaded [here](https://ucsb.box.com/s/vqcxockfzoxfqltrg4l619x1cfvnskog). This model was trained solely on the COCO train2014 data. It achieves the following BLEU scores on the COCO val2014 data :
 * **BLEU-1 = 62.9%**
 * **BLEU-2 = 43.6%**
 * **BLEU-3 = 29.0%**
