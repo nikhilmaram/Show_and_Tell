@@ -7,11 +7,11 @@ class Config(object):
         self.max_caption_length = 20
         self.dim_embedding = 512
         self.num_lstm_units = 512
-        self.num_initalize_layers = 2    # 1 or 2
+        self.num_initalize_layers = 1 ## Changed from 2 to 1    # 1 or 2
         self.dim_initalize_layer = 512
         self.num_attend_layers = 2       # 1 or 2
         self.dim_attend_layer = 512
-        self.num_decode_layers = 2       # 1 or 2
+        self.num_decode_layers = 1    ## Changed from 2 to 1   # 1 or 2
         self.dim_decode_layer = 1024
 
         # about the weight initialization and regularization
@@ -66,3 +66,5 @@ class Config(object):
         self.test_image_dir = './test/images/'
         self.test_result_dir = './test/results/'
         self.test_result_file = './test/results.csv'
+
+        self.trainable_variable = False
