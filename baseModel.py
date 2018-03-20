@@ -11,9 +11,8 @@ from tqdm import tqdm
 
 
 import six.moves.cPickle as pickle
-from utils.coco.coco import COCO
 from utils.coco.pycocoevalcap.eval import COCOEvalCap
-from utils.misc import CaptionData, ImageLoader, TopN
+from utils.misc import  ImageLoader
 from utils.nn import NN
 
 
@@ -51,13 +50,16 @@ class BaseModel(object):
                 feed_dict = {self.images: images,
                              self.sentences: sentences,
                              self.masks: masks}
-                _, summary, global_step = sess.run([self.opt_op,
-                                                    self.summary,
+                # _, summary, global_step = sess.run([self.opt_op,
+                #                                     self.summary,
+                #                                     self.global_step],
+                #                                     feed_dict=feed_dict)
+                _, global_step = sess.run([self.opt_op,
                                                     self.global_step],
-                                                    feed_dict=feed_dict)
+                                                   feed_dict=feed_dict)
                 if (global_step + 1) % config.save_period == 0:
                     self.save()
-                train_writer.add_summary(summary, global_step)
+                #train_writer.add_summary(summary, global_step)
             train_data.reset()
 
         self.save()
@@ -76,17 +78,21 @@ class BaseModel(object):
         # Generate the captions for the images
         idx = 0
         for k in tqdm(list(range(eval_data.num_batches)), desc='batch'):
+        #for k in range(1):
             batch = eval_data.next_batch()
-            caption_data = self.beam_search(sess, batch, vocabulary)
-
+            #caption_data = self.beam_search(sess, batch, vocabulary)
+            images = self.image_loader.load_images(batch)
+            caption_data, scores = sess.run([self.predictions, self.probs], feed_dict={self.images: images})
             fake_cnt = 0 if k<eval_data.num_batches-1 \
                          else eval_data.fake_count
             for l in range(eval_data.batch_size-fake_cnt):
-                word_idxs = caption_data[l][0].sentence
-                score = caption_data[l][0].score
-                caption = vocabulary.get_sentence(word_idxs)
-                results.append({'image_id': eval_data.image_ids[idx],
+                ## self.predictions will return the indexes of words, we need to find the corresponding word from it.
+                word_idxs = caption_data[l]
+                ## get_sentence will return a sentence till there is a end delimiter which is '.'
+                caption = str(vocabulary.get_sentence(word_idxs))
+                results.append({'image_id': int(eval_data.image_ids[idx]),
                                 'caption': caption})
+                #print(results)
                 idx += 1
 
                 # Save the result in an image file, if requested
@@ -101,7 +107,7 @@ class BaseModel(object):
                     plt.savefig(os.path.join(config.eval_result_dir,
                                              image_name+'_result.jpg'))
 
-        fp = open(config.eval_result_file, 'wb')
+        fp = open(config.eval_result_file, 'w')
         json.dump(results, fp)
         fp.close()
 
@@ -125,16 +131,19 @@ class BaseModel(object):
         # Generate the captions for the images
         for k in tqdm(list(range(test_data.num_batches)), desc='path'):
             batch = test_data.next_batch()
-            caption_data = self.beam_search(sess, batch, vocabulary)
+            images = self.image_loader.load_images(batch)
+            caption_data,scores_data = sess.run([self.predictions,self.probs],feed_dict={self.images:images})
 
             fake_cnt = 0 if k<test_data.num_batches-1 \
                          else test_data.fake_count
             for l in range(test_data.batch_size-fake_cnt):
-                word_idxs = caption_data[l][0].sentence
-                score = caption_data[l][0].score
+                ## self.predictions will return the indexes of words, we need to find the corresponding word from it.
+                word_idxs = caption_data[l]
+                ## get_sentence will return a sentence till there is a end delimiter which is '.'
                 caption = vocabulary.get_sentence(word_idxs)
+                print(caption)
                 captions.append(caption)
-                scores.append(score)
+                scores.append(scores_data[l])
 
                 # Save the result in an image file
                 image_file = batch[l]
@@ -147,91 +156,12 @@ class BaseModel(object):
                 plt.savefig(os.path.join(config.test_result_dir,
                                          image_name+'_result.jpg'))
 
-        # Save the captions to a file
+        ##Save the captions to a file
         results = pd.DataFrame({'image_files':test_data.image_files,
                                 'caption':captions,
                                 'prob':scores})
         results.to_csv(config.test_result_file)
         print("Testing complete.")
-
-    def beam_search(self, sess, image_files, vocabulary):
-        """Use beam search to generate the captions for a batch of images."""
-        # Feed in the images to get the contexts and the initial LSTM states
-        config = self.config
-        images = self.image_loader.load_images(image_files)
-        contexts, initial_memory, initial_output = sess.run(
-            [self.conv_feats, self.initial_memory, self.initial_output],
-            feed_dict = {self.images: images})
-
-        partial_caption_data = []
-        complete_caption_data = []
-        for k in range(config.batch_size):
-            initial_beam = CaptionData(sentence = [],
-                                       memory = initial_memory[k],
-                                       output = initial_output[k],
-                                       score = 1.0)
-            partial_caption_data.append(TopN(config.beam_size))
-            partial_caption_data[-1].push(initial_beam)
-            complete_caption_data.append(TopN(config.beam_size))
-
-        # Run beam search
-        for idx in range(config.max_caption_length):
-            partial_caption_data_lists = []
-            for k in range(config.batch_size):
-                data = partial_caption_data[k].extract()
-                partial_caption_data_lists.append(data)
-                partial_caption_data[k].reset()
-
-            num_steps = 1 if idx == 0 else config.beam_size
-            for b in range(num_steps):
-                if idx == 0:
-                    last_word = np.zeros((config.batch_size), np.int32)
-                else:
-                    last_word = np.array([pcl[b].sentence[-1]
-                                        for pcl in partial_caption_data_lists],
-                                        np.int32)
-
-                last_memory = np.array([pcl[b].memory
-                                        for pcl in partial_caption_data_lists],
-                                        np.float32)
-                last_output = np.array([pcl[b].output
-                                        for pcl in partial_caption_data_lists],
-                                        np.float32)
-
-                memory, output, scores = sess.run(
-                    [self.memory, self.output, self.probs],
-                    feed_dict = {self.contexts: contexts,
-                                 self.last_word: last_word,
-                                 self.last_memory: last_memory,
-                                 self.last_output: last_output})
-
-                # Find the beam_size most probable next words
-                for k in range(config.batch_size):
-                    caption_data = partial_caption_data_lists[k][b]
-                    words_and_scores = list(enumerate(scores[k]))
-                    words_and_scores.sort(key=lambda x: -x[1])
-                    words_and_scores = words_and_scores[0:config.beam_size+1]
-
-                    # Append each of these words to the current partial caption
-                    for w, s in words_and_scores:
-                        sentence = caption_data.sentence + [w]
-                        score = caption_data.score * s
-                        beam = CaptionData(sentence,
-                                           memory[k],
-                                           output[k],
-                                           score)
-                        if vocabulary.words[w] == '.':
-                            complete_caption_data[k].push(beam)
-                        else:
-                            partial_caption_data[k].push(beam)
-
-        results = []
-        for k in range(config.batch_size):
-            if complete_caption_data[k].size() == 0:
-                complete_caption_data[k] = partial_caption_data[k]
-            results.append(complete_caption_data[k].extract(sort=True))
-
-        return results
 
     def save(self):
         """ Save the model. """
@@ -279,10 +209,8 @@ class BaseModel(object):
         with tf.variable_scope('conv1_1',reuse = True):
             kernel = tf.get_variable('conv1_1_W')
 
-
         print("Loading the CNN from %s..." %data_path)
         data_dict = np.load(data_path,encoding='latin1')
-        keys = sorted(data_dict.keys())
         count = 0
         for param_name in tqdm(data_dict.keys()):
             op_name = param_name[:-2]
