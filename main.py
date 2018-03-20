@@ -44,6 +44,7 @@ def main(argv):
     config.phase = FLAGS.phase
     config.train_cnn = FLAGS.train_cnn
     config.beam_size = FLAGS.beam_size
+    config.trainable_variable = FLAGS.train_cnn
 
     with tf.Session() as sess:
         if FLAGS.phase == 'train':
