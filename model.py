@@ -1,9 +1,6 @@
 import tensorflow as tf
 import numpy as np
 
-import tensorflow as tf
-import numpy as np
-
 from baseModel import BaseModel
 
 class CaptionGenerator(BaseModel):
@@ -11,9 +8,9 @@ class CaptionGenerator(BaseModel):
         """ Build the model. """
         self.build_cnn()
         self.build_rnn()
-        # if self.is_train:
-        #     self.build_optimizer()
-        #     self.build_summary()
+        if self.is_train:
+            self.build_optimizer()
+            ##self.build_summary() ## TODO : commented the build_summary because it might take extra timw
 
     def test_cnn(self,image):
         self.imgs = image
@@ -264,26 +261,14 @@ class CaptionGenerator(BaseModel):
 
         # Setup the placeholders
         if self.is_train:
-            contexts = self.conv_feats
+            #contexts = self.conv_feats
             sentences = tf.placeholder(
                 dtype = tf.int32,
                 shape = [config.batch_size, config.max_caption_length])
             masks = tf.placeholder(
                 dtype = tf.float32,
                 shape = [config.batch_size, config.max_caption_length])
-        else:
-            contexts = tf.placeholder(
-                dtype = tf.float32,
-                shape = [config.batch_size, self.num_ctx, self.dim_ctx])
-            last_memory = tf.placeholder(
-                dtype = tf.float32,
-                shape = [config.batch_size, config.num_lstm_units])
-            last_output = tf.placeholder(
-                dtype = tf.float32,
-                shape = [config.batch_size, config.num_lstm_units])
-            last_word = tf.placeholder(
-                dtype = tf.int32,
-                shape = [config.batch_size])
+
 
         # Setup the word embedding, we can use pre trained word embeddings later //TODO
         with tf.variable_scope("word_embedding"):
@@ -305,65 +290,56 @@ class CaptionGenerator(BaseModel):
                 output_keep_prob = 1.0-config.lstm_drop_rate,
                 state_keep_prob = 1.0-config.lstm_drop_rate)
 
-        # # Initialize the LSTM using the mean context
-        # with tf.variable_scope("initialize"):
-        #     context_mean = tf.reduce_mean(self.conv_feats, axis = 1)
-        #     initial_memory, initial_output = self.initialize(context_mean)
-        #     initial_state = initial_memory, initial_output
 
-        ## 8 * 512 is reduced to 512 by mean, We can use matrix multiplaction also to covert // TODO
-
+        ## 8 * 512 is reduced to 512(embedding size of word) by mean, We can use matrix multiplication also to covert // TODO
+        initial_memory = tf.zeros([config.batch_size, lstm.state_size[0]])
+        initial_output = tf.zeros([config.batch_size, lstm.state_size[1]])
 
         # Prepare to run
-        predictions = []
-        if self.is_train:
-            alphas = []
-            cross_entropies = []
-            predictions_correct = []
-            num_steps = config.max_caption_length
-            last_word = tf.zeros([config.batch_size], tf.int32)
-            image_emb = tf.reduce_mean(self.conv_feats, axis=1)
-            last_state = image_emb
-        else:
-            num_steps = 1
-        #last_state = last_memory, last_output
+        predictionsArr = []
+        cross_entropies = []
+        predictions_correct = []
+        num_steps = config.max_caption_length
+        image_emb = tf.reduce_mean(self.conv_feats, axis=1)
+
+        ## Initial memory and output are given zeros
+        last_memory = initial_memory
+        last_output = initial_output
+        last_word = image_emb
+
+
+        last_state = last_memory, last_output
 
         # Generate the words one by one
         for idx in range(num_steps):
-
             # Embed the last word
-            with tf.variable_scope("word_embedding"):
-                word_embed = tf.nn.embedding_lookup(embedding_matrix,
-                                                    last_word)
+            ## for 1st LSTM the input is the image
+            if idx == 0:
+                word_embed = image_emb
+            else:
+                with tf.variable_scope("word_embedding"):
+                    word_embed = tf.nn.embedding_lookup(embedding_matrix,
+                                                        last_word)
            # Apply the LSTM
             with tf.variable_scope("lstm"):
-                #current_input = tf.concat([context, word_embed], 1)
                 current_input = word_embed
                 output, state = lstm(current_input, last_state)
-
-            # TODO : Now we have state we need to convert the state into output word
+                memory, _ = state
 
             # Decode the expanded output of LSTM into a word
             with tf.variable_scope("decode"):
-                # expanded_output = tf.concat([output,
-                #                              context,
-                #                              word_embed],
-                #                              axis = 1)
-                ## Since we are not considering any context
                 expanded_output = output
                 ## Logits is of size vocab
                 logits = self.decode(expanded_output)
                 probs = tf.nn.softmax(logits)
                 ## Prediction is the index of the word the predicted in the vocab
                 prediction = tf.argmax(logits, 1)
-                predictions.append(prediction)
+                predictionsArr.append(prediction)
 
-            ## TODO : Make the same thing for test
+                self.probs = probs
 
-
-
-            # Compute the loss for this step, if necessary
             if self.is_train:
+                # Compute the loss for this step, if necessary
                 cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
                     labels = sentences[:, idx],
                     logits = logits)
@@ -377,126 +353,119 @@ class CaptionGenerator(BaseModel):
                     tf.cast(tf.zeros_like(prediction), tf.float32))
                 predictions_correct.append(prediction_correct)
 
-                last_output = output
-                last_state = state
+
+            last_state = state
+            if self.is_train:
+                ##  During training the input to LSTM is fed by user
                 last_word = sentences[:, idx]
+            else:
+                # During testing the input to current time stamp of LSTM is the previous time stamp output.
+                last_word = prediction
 
             tf.get_variable_scope().reuse_variables()
-
-        # Compute the final loss, if necessary
         if self.is_train:
-            cross_entropies = tf.stack(cross_entropies, axis = 1)
+            # Compute the final loss, if necessary
+            cross_entropies = tf.stack(cross_entropies, axis=1)
             cross_entropy_loss = tf.reduce_sum(cross_entropies) \
                                  / tf.reduce_sum(masks)
 
             reg_loss = tf.losses.get_regularization_loss()
 
-            total_loss = cross_entropy_loss  + reg_loss
+            total_loss = cross_entropy_loss + reg_loss
 
-            predictions_correct = tf.stack(predictions_correct, axis = 1)
+            predictions_correct = tf.stack(predictions_correct, axis=1)
             accuracy = tf.reduce_sum(predictions_correct) \
                        / tf.reduce_sum(masks)
 
-        self.contexts = contexts
-        if self.is_train:
             self.sentences = sentences
             self.masks = masks
             self.total_loss = total_loss
             self.cross_entropy_loss = cross_entropy_loss
             self.reg_loss = reg_loss
             self.accuracy = accuracy
-
-        else:
-            self.initial_memory = initial_memory
-            self.initial_output = initial_output
-            self.last_memory = last_memory
-            self.last_output = last_output
-            self.last_word = last_word
-            self.memory = memory
-            self.output = output
-            self.probs = probs
+        self.predictions = tf.stack(predictionsArr, axis=1)
 
         print("RNN built.")
 
-    def initialize(self, context_mean):
-        """ Initialize the LSTM using the mean context. """
-        config = self.config
-        context_mean = self.nn.dropout(context_mean)
-        if config.num_initalize_layers == 1:
-            # use 1 fc layer to initialize
-            memory = self.nn.dense(context_mean,
-                                   units = config.num_lstm_units,
-                                   activation = None,
-                                   name = 'fc_a')
-            output = self.nn.dense(context_mean,
-                                   units = config.num_lstm_units,
-                                   activation = None,
-                                   name = 'fc_b')
-        else:
-            # use 2 fc layers to initialize
-            temp1 = self.nn.dense(context_mean,
-                                  units = config.dim_initalize_layer,
-                                  activation = tf.tanh,
-                                  name = 'fc_a1')
-            temp1 = self.nn.dropout(temp1)
-            memory = self.nn.dense(temp1,
-                                   units = config.num_lstm_units,
-                                   activation = None,
-                                   name = 'fc_a2')
-
-            temp2 = self.nn.dense(context_mean,
-                                  units = config.dim_initalize_layer,
-                                  activation = tf.tanh,
-                                  name = 'fc_b1')
-            temp2 = self.nn.dropout(temp2)
-            output = self.nn.dense(temp2,
-                                   units = config.num_lstm_units,
-                                   activation = None,
-                                   name = 'fc_b2')
-        return memory, output
-
-    def attend(self, contexts, output):
-        """ Attention Mechanism. """
-        config = self.config
-        reshaped_contexts = tf.reshape(contexts, [-1, self.dim_ctx])
-        reshaped_contexts = self.nn.dropout(reshaped_contexts)
-        output = self.nn.dropout(output)
-        if config.num_attend_layers == 1:
-            # use 1 fc layer to attend
-            logits1 = self.nn.dense(reshaped_contexts,
-                                    units = 1,
-                                    activation = None,
-                                    use_bias = False,
-                                    name = 'fc_a')
-            logits1 = tf.reshape(logits1, [-1, self.num_ctx])
-            logits2 = self.nn.dense(output,
-                                    units = self.num_ctx,
-                                    activation = None,
-                                    use_bias = False,
-                                    name = 'fc_b')
-            logits = logits1 + logits2
-        else:
-            # use 2 fc layers to attend
-            temp1 = self.nn.dense(reshaped_contexts,
-                                  units = config.dim_attend_layer,
-                                  activation = tf.tanh,
-                                  name = 'fc_1a')
-            temp2 = self.nn.dense(output,
-                                  units = config.dim_attend_layer,
-                                  activation = tf.tanh,
-                                  name = 'fc_1b')
-            temp2 = tf.tile(tf.expand_dims(temp2, 1), [1, self.num_ctx, 1])
-            temp2 = tf.reshape(temp2, [-1, config.dim_attend_layer])
-            temp = temp1 + temp2
-            temp = self.nn.dropout(temp)
-            logits = self.nn.dense(temp,
-                                   units = 1,
-                                   activation = None,
-                                   use_bias = False,
-                                   name = 'fc_2')
-            logits = tf.reshape(logits, [-1, self.num_ctx])
-        alpha = tf.nn.softmax(logits)
-        return alpha
+    # def initialize(self, context_mean):
+    #     """ Initialize the LSTM using the mean context. """
+    #     config = self.config
+    #     context_mean = self.nn.dropout(context_mean)
+    #     if config.num_initalize_layers == 1:
+    #         # use 1 fc layer to initialize
+    #         memory = self.nn.dense(context_mean,
+    #                                units = config.num_lstm_units,
+    #                                activation = None,
+    #                                name = 'fc_a')
+    #         output = self.nn.dense(context_mean,
+    #                                units = config.num_lstm_units,
+    #                                activation = None,
+    #                                name = 'fc_b')
+    #     else:
+    #         # use 2 fc layers to initialize
+    #         temp1 = self.nn.dense(context_mean,
+    #                               units = config.dim_initalize_layer,
+    #                               activation = tf.tanh,
+    #                               name = 'fc_a1')
+    #         temp1 = self.nn.dropout(temp1)
+    #         memory = self.nn.dense(temp1,
+    #                                units = config.num_lstm_units,
+    #                                activation = None,
+    #                                name = 'fc_a2')
+    #
+    #         temp2 = self.nn.dense(context_mean,
+    #                               units = config.dim_initalize_layer,
+    #                               activation = tf.tanh,
+    #                               name = 'fc_b1')
+    #         temp2 = self.nn.dropout(temp2)
+    #         output = self.nn.dense(temp2,
+    #                                units = config.num_lstm_units,
+    #                                activation = None,
+    #                                name = 'fc_b2')
+    #     return memory, output
+    #
+    # def attend(self, contexts, output):
+    #     """ Attention Mechanism. """
+    #     config = self.config
+    #     reshaped_contexts = tf.reshape(contexts, [-1, self.dim_ctx])
+    #     reshaped_contexts = self.nn.dropout(reshaped_contexts)
+    #     output = self.nn.dropout(output)
+    #     if config.num_attend_layers == 1:
+    #         # use 1 fc layer to attend
+    #         logits1 = self.nn.dense(reshaped_contexts,
+    #                                 units = 1,
+    #                                 activation = None,
+    #                                 use_bias = False,
+    #                                 name = 'fc_a')
+    #         logits1 = tf.reshape(logits1, [-1, self.num_ctx])
+    #         logits2 = self.nn.dense(output,
+    #                                 units = self.num_ctx,
+    #                                 activation = None,
+    #                                 use_bias = False,
+    #                                 name = 'fc_b')
+    #         logits = logits1 + logits2
+    #     else:
+    #         # use 2 fc layers to attend
+    #         temp1 = self.nn.dense(reshaped_contexts,
+    #                               units = config.dim_attend_layer,
+    #                               activation = tf.tanh,
+    #                               name = 'fc_1a')
+    #         temp2 = self.nn.dense(output,
+    #                               units = config.dim_attend_layer,
+    #                               activation = tf.tanh,
+    #                               name = 'fc_1b')
+    #         temp2 = tf.tile(tf.expand_dims(temp2, 1), [1, self.num_ctx, 1])
+    #         temp2 = tf.reshape(temp2, [-1, config.dim_attend_layer])
+    #         temp = temp1 + temp2
+    #         temp = self.nn.dropout(temp)
+    #         logits = self.nn.dense(temp,
+    #                                units = 1,
+    #                                activation = None,
+    #                                use_bias = False,
+    #                                name = 'fc_2')
+    #         logits = tf.reshape(logits, [-1, self.num_ctx])
+    #     alpha = tf.nn.softmax(logits)
+    #     return alpha
 
     def decode(self, expanded_output):
         """ Decode the expanded output of the LSTM into a word. """
@@ -584,13 +553,10 @@ class CaptionGenerator(BaseModel):
 
         with tf.name_scope("metrics"):
             tf.summary.scalar("cross_entropy_loss", self.cross_entropy_loss)
-            tf.summary.scalar("attention_loss", self.attention_loss)
             tf.summary.scalar("reg_loss", self.reg_loss)
             tf.summary.scalar("total_loss", self.total_loss)
             tf.summary.scalar("accuracy", self.accuracy)
 
-        with tf.name_scope("attentions"):
-            self.variable_summary(self.attentions)
 
         self.summary = tf.summary.merge_all()
 
