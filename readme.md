@@ -16,14 +16,14 @@ This neural system for image captioning is roughly based on the paper "Show and 
 * **Training:**
 To train a model using the COCO train2014 data, first setup various parameters in the file `config.py` and then run a command like this:
 ```shell
-python main.py --phase=train \
+python3 main.py --phase=train \
     --load_cnn \
     --cnn_model_file='./vgg16_weights.npz'\
     [--train_cnn]
 ```
 Turn on `--train_cnn` if you want to jointly train the CNN and RNN parts. Otherwise, only the RNN part is trained. The checkpoints will be saved in the folder `models`. If you want to resume the training from a checkpoint, run a command like this:
 ```shell
-python main.py --phase=train \
+python3 main.py --phase=train \
     --load \
     --model_file='./models/xxxxxx.npy'\
     [--train_cnn]
@@ -36,7 +36,7 @@ tensorboard --logdir='./summary/'
 * **Evaluation:**
 To evaluate a trained model using the COCO val2014 data, run a command like this:
 ```shell
-python main.py --phase=eval \
+python3 main.py --phase=eval \
     --model_file='./models/xxxxxx.npy'
 ```
 The result will be shown in stdout. Furthermore, the generated captions will be saved in the file `val/results.json`.
@@ -44,7 +44,7 @@ The result will be shown in stdout. Furthermore, the generated captions will be 
 * **Inference:**
 You can use the trained model to generate captions for any JPEG images! Put such images in the folder `test/images`, and run a command like this:
 ```shell
-python main.py --phase=test \
+python3 main.py --phase=test \
     --model_file='./models/xxxxxx.npy'
 ```
 The generated captions will be saved in the folder `test/results`.
